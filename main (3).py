@@ -21,171 +21,109 @@ SYMBOLS = [
 if 'last_signal_time' not in st.session_state:
     st.session_state.last_signal_time = {symbol: 0 for symbol in SYMBOLS}
 
-COOLDOWN_SECONDS = 300  # 5 دقائق
+COOLDOWN_SECONDS = 300 
 
 # ═══════════════════════════════════════════════════════════════════════
-# دوال التحليل الفني
+# الدوال الفنية
 # ═══════════════════════════════════════════════════════════════════════
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+    rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-def calculate_mfi(df, period=14):
-    typical_price = (df['high'] + df['low'] + df['close']) / 3
-    money_flow = typical_price * df['volumeto']
-    positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(window=period).sum()
-    negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0).rolling(window=period).sum()
-    return 100 - (100 / (1 + (positive_flow / negative_flow)))
-
-def calculate_macd(series, fast=12, slow=26, signal=9):
-    ema_fast = series.ewm(span=fast, adjust=False).mean()
-    ema_slow = series.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-def calculate_ema(series, period):
-    return series.ewm(span=period, adjust=False).mean()
-
-def calculate_momentum(series, period=3):
-    return series - series.shift(period)
-
-def calculate_atr(df, period=14):
-    df['tr1'] = df['high'] - df['low']
-    df['tr2'] = abs(df['high'] - df['close'].shift())
-    df['tr3'] = abs(df['low'] - df['close'].shift())
-    df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
-    return df['tr'].rolling(window=period).mean()
-
-# ═══════════════════════════════════════════════════════════════════════
-# محرك التنبؤ
-# ═══════════════════════════════════════════════════════════════════════
+def calculate_macd(series):
+    exp1 = series.ewm(span=12, adjust=False).mean()
+    exp2 = series.ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal, macd - signal
 
 def predict_next_5_minutes(df):
-    if len(df) < 50:
-        return "NEUTRAL", 0, 0, ["⚠️ بيانات غير كافية"]
+    if len(df) < 30:
+        return "NEUTRAL", 0, 0, ["بيانات ناقصة"]
     
-    df = df.copy()
-    df['RSI'] = calculate_rsi(df['close'], 14)
-    df['MFI'] = calculate_mfi(df, 14)
-    df['MACD'], df['MACD_Signal'], df['MACD_Histogram'] = calculate_macd(df['close'])
-    df['EMA20'] = calculate_ema(df['close'], 20)
-    df['EMA50'] = calculate_ema(df['close'], 50)
-    df['Momentum'] = calculate_momentum(df['close'], 3)
-    df['ATR'] = calculate_atr(df, 14)
+    last_price = df['close'].iloc[-1]
+    rsi = calculate_rsi(df['close']).iloc[-1]
+    macd, signal, hist = calculate_macd(df['close'])
     
-    last = df.iloc[-1]
-    prediction_score = 0
+    score = 0
     factors = []
     
-    # منطق الاتجاه
-    if last['close'] > last['EMA20'] > last['EMA50']:
-        prediction_score += 3
-        factors.append("✅ اتجاه صاعد قوي (EMA)")
-    elif last['close'] < last['EMA20'] < last['EMA50']:
-        prediction_score -= 3
-        factors.append("❌ اتجاه هابط قوي (EMA)")
-        
-    # منطق RSI
-    if last['RSI'] < 30:
-        prediction_score += 2
-        factors.append("🟢 تشبع بيعي (RSI)")
-    elif last['RSI'] > 70:
-        prediction_score -= 2
-        factors.append("🔴 تشبع شرائي (RSI)")
-        
-    # منطق MACD
-    if last['MACD_Histogram'] > 0:
-        prediction_score += 2
-        factors.append("📈 زخم MACD إيجابي")
-    else:
-        prediction_score -= 2
-        factors.append("📉 زخم MACD سلبي")
-
-    confidence = min(100, (abs(prediction_score) / 10) * 100)
-    direction = "BULLISH" if prediction_score > 2 else "BEARISH" if prediction_score < -2 else "NEUTRAL"
+    if rsi < 30: score += 2; factors.append("RSI تشبع بيع")
+    if rsi > 70: score -= 2; factors.append("RSI تشبع شراء")
+    if hist.iloc[-1] > 0: score += 2; factors.append("MACD إيجابي")
+    if hist.iloc[-1] < 0: score -= 2; factors.append("MACD سلبي")
     
-    return direction, prediction_score, confidence, factors
+    direction = "BULLISH" if score > 1 else "BEARISH" if score < -1 else "NEUTRAL"
+    confidence = min(100, abs(score) * 20)
+    
+    return direction, score, confidence, factors
 
 # ═══════════════════════════════════════════════════════════════════════
-# جلب البيانات (التعديل الأساسي هنا)
+# دالة جلب البيانات - النسخة الآمنة
 # ═══════════════════════════════════════════════════════════════════════
 
 def analyze_and_predict(symbol):
+    # نضع قيم افتراضية (5 قيم) لنضمن عدم حدوث ValueError أبداً
+    default_return = (None, "NEUTRAL", 0, 0, [])
+    
     try:
         fsym = symbol[:-3] if any(x in symbol for x in ['USD', 'JPY', 'CAD']) else symbol[:3]
         tsym = symbol[-3:]
         if symbol == 'GOLD': fsym, tsym = 'XAU', 'USD'
 
-        url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={fsym}&tsym={tsym}&limit=300"
-        response = requests.get(url, timeout=15).json()
+        url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={fsym}&tsym={tsym}&limit=100"
+        response = requests.get(url, timeout=10).json()
         
+        # التأكد من نجاح الاستجابة
         if response.get('Response') != 'Success':
-            return None, None, None, None, None # تم توحيد عدد القيم (5)
+            return default_return
         
-        df = pd.DataFrame(response['Data']['Data'])
+        data = response.get('Data', {}).get('Data', [])
+        if not data:
+            return default_return
+            
+        df = pd.DataFrame(data)
         df['time'] = pd.to_datetime(df['time'], unit='s')
         
         direction, score, confidence, factors = predict_next_5_minutes(df)
         return df, direction, score, confidence, factors
-    except Exception as e:
-        return None, None, None, None, None # تم توحيد عدد القيم (5)
+        
+    except Exception:
+        return default_return
 
 # ═══════════════════════════════════════════════════════════════════════
-# الواجهة والعرض
+# الواجهة الأساسية
 # ═══════════════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="5 Minute Predictor", layout="wide")
-st.title("🔮 نظام التنبؤ - الـ 5 دقائق القادمة")
+st.set_page_config(page_title="Safe Predictor", layout="wide")
+st.title("🔮 نظام التنبؤ المستقر")
 
 selected_symbol = st.sidebar.selectbox("اختر الزوج", SYMBOLS)
-refresh_rate = st.sidebar.slider("سرعة التحديث (ثانية)", 5, 30, 15)
+refresh_rate = st.sidebar.slider("تحديث كل (ثانية)", 5, 60, 20)
 
-placeholder_main = st.empty()
+# استخدام الـ Unpacking الآمن
+result = analyze_and_predict(selected_symbol)
+# هنا نضمن دائماً أننا نستلم 5 قيم
+df, direction, score, confidence, factors = result
 
-def update_display():
-    # استلام النتائج ككتلة واحدة للتأكد من العدد
-    result = analyze_and_predict(selected_symbol)
-    df, direction, score, confidence, factors = result
+if df is not None:
+    # عرض النتائج
+    st.metric("السعر الحالي", f"{df['close'].iloc[-1]}")
+    if direction == "BULLISH": st.success(f"توقع صعود بقوة {confidence}%")
+    elif direction == "BEARISH": st.error(f"توقع هبوط بقوة {confidence}%")
+    else: st.info("الاتجاه محايد حالياً")
     
-    if df is None:
-        st.error("⚠️ فشل الاتصال بالخادم. سيتم المحاولة مرة أخرى...")
-        return
+    # الرسم البياني
+    fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'])])
+    fig.update_layout(height=400, template="plotly_dark", xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("⚠️ جاري محاولة الاتصال بمزود البيانات... يرجى الانتظار")
 
-    with placeholder_main.container():
-        # عرض التنبؤ
-        if direction == "BULLISH":
-            st.success(f"### 📈 الحركة القادمة المتوقعة: صاعدة ({confidence:.1f}%)")
-        elif direction == "BEARISH":
-            st.error(f"### 📉 الحركة القادمة المتوقعة: هابطة ({confidence:.1f}%)")
-        else:
-            st.warning("### 〰️ الحركة الحالية: محايدة")
-
-        # المقاييس
-        c1, c2, c3 = st.columns(3)
-        c1.metric("السعر الحالي", f"${df.iloc[-1]['close']:.4f}")
-        c2.metric("قوة الإشارة", f"{score:.1f}/10")
-        c3.metric("الثقة", f"{confidence:.1f}%")
-
-        # العوامل والرسوم (تبسيطاً للعرض)
-        st.write("🔍 **العوامل المؤثرة:** ", ", ".join(factors))
-        
-        # التنبيه لتلغرام
-        now = time.time()
-        if direction != "NEUTRAL" and (now - st.session_state.last_signal_time[selected_symbol] >= COOLDOWN_SECONDS):
-            try:
-                msg = f"🔮 تنبيه {selected_symbol}\nالاتجاه: {direction}\nالثقة: {confidence:.1f}%\nالسعر: {df.iloc[-1]['close']}"
-                bot.send_message(CHAT_ID, msg)
-                st.session_state.last_signal_time[selected_symbol] = now
-            except: pass
-
-update_display()
-
-# إعادة التشغيل التلقائي
+# إعادة التشغيل
 time.sleep(refresh_rate)
 st.rerun()
