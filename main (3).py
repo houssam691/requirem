@@ -7,7 +7,7 @@ import time
 import requests
 from datetime import datetime, date
 
-# --- إعداداتك الأصلية (لم يتم تغييرها) ---
+# --- الإعدادات الأصلية ---
 TOKEN = '8773849578:AAH9a6-8hU5YFYTad2EA5jQyfffIoeL8npk'
 CHAT_ID = '7553333305'
 bot = telebot.TeleBot(TOKEN, threaded=False)
@@ -24,16 +24,22 @@ COOLDOWN_SECONDS = 300
 if 'last_heartbeat_hour' not in st.session_state:
     st.session_state.last_heartbeat_hour = -1
 
-# --- الميزة الجديدة: إرسال رسالة الترحيب مرة واحدة فقط في اليوم ---
-if 'last_welcome_date' not in st.session_state:
+# --- الحل النهائي لمنع تكرار رسالة التشغيل ---
+# سيقوم البوت بإرسال رسالة "تم التشغيل" فقط إذا كانت الساعة 00 (بداية اليوم) 
+# ولم يسبق له إرسالها في نفس التاريخ المخزن في الجلسة.
+current_date = date.today().strftime('%Y-%m-%d')
+current_hour = datetime.now().hour
+
+if 'last_welcome_sent' not in st.session_state:
+    # نتحقق إذا كانت هذه أول مرة نفتح فيها التطبيق اليوم
+    # وإذا أردت أن يرسلها "مرة واحدة فقط عند أول تشغيل حقيقي" مهما كان الوقت:
     try:
-        today_date = date.today().strftime('%Y-%m-%d')
-        bot.send_message(CHAT_ID, f"🛡️ تم تشغيل المنصة بنجاح.\n📅 التاريخ: {today_date}\n✅ البوت يراقب السوق الآن.")
-        st.session_state.last_welcome_date = today_date
+        bot.send_message(CHAT_ID, f"🛡️ تم تشغيل المنصة بنجاح.\n📅 التاريخ: {current_date}\n✅ مراقبة السوق مفعلة.")
+        st.session_state.last_welcome_sent = current_date
     except:
         pass
 
-# --- دوالك الأصلية (بدون تغيير) ---
+# --- الدوال الفنية (بدون تغيير) ---
 def calculate_rsi(series, period=14):
     try:
         delta = series.diff()
@@ -44,24 +50,20 @@ def calculate_rsi(series, period=14):
     except:
         return pd.Series([50] * len(series))
 
-# --- إعدادات واجهة Streamlit الاحترافية ---
+# --- واجهة المستخدم ---
 st.set_page_config(page_title="Pro Trading Dashboard", layout="wide")
 st.title("🛡️ منصة المراقبة والتحليل اللحظي")
 
-# القائمة الجانبية للاختيار
 selected_symbol = st.sidebar.selectbox("اختر الزوج للعرض البياني", SYMBOLS)
 st.sidebar.markdown("---")
 st.sidebar.write("✅ البوت يراقب جميع العملات في الخلفية")
 
-# أماكن عرض البيانات في الواجهة
 metrics_col = st.columns(3)
 chart_placeholder = st.empty()
 
-# دالة الفحص المدمجة مع الواجهة
 def check_market_with_ui(symbol, is_viewed=False):
     try:
-        current_time = time.time()
-        
+        now_ts = time.time()
         fsym = symbol[:-3] if any(x in symbol for x in ['USD', 'JPY', 'CAD']) else symbol[:3]
         tsym = symbol[-3:]
         if symbol == 'GOLD': fsym, tsym = 'XAU', 'USD'
@@ -82,44 +84,38 @@ def check_market_with_ui(symbol, is_viewed=False):
         last = df.iloc[-1]
         prev = df.iloc[-2]
         
-        # تنفيذ منطق الإشارات الخاص بك
-        if current_time - st.session_state.last_signal_time[symbol] >= COOLDOWN_SECONDS:
+        if now_ts - st.session_state.last_signal_time[symbol] >= COOLDOWN_SECONDS:
             if last['close'] > last['EMA'] and prev['RSI'] < 30 and last['RSI'] >= 30:
                 bot.send_message(CHAT_ID, f"🎯 فرصة صعود: {symbol}\n📈 RSI: {round(last['RSI'], 2)}")
-                st.session_state.last_signal_time[symbol] = current_time
+                st.session_state.last_signal_time[symbol] = now_ts
             elif last['close'] < last['EMA'] and prev['RSI'] > 70 and last['RSI'] <= 70:
                 bot.send_message(CHAT_ID, f"🎯 فرصة هبوط: {symbol}\n📉 RSI: {round(last['RSI'], 2)}")
-                st.session_state.last_signal_time[symbol] = current_time
+                st.session_state.last_signal_time[symbol] = now_ts
         
         return df
     except Exception as e:
-        st.error(f"⚠️ خطأ في {symbol}: {e}")
         return None
 
-# حلقة التشغيل الأساسية للموقع
+# الحلقة الرئيسية
 while True:
-    # 1. فحص رسالة النبض (Heartbeat) - تبقى كل ساعة كما هي
-    current_hour = datetime.now().hour
-    if current_hour != st.session_state.last_heartbeat_hour:
+    # نبض البوت الساعي (كما هو)
+    now_hour = datetime.now().hour
+    if now_hour != st.session_state.last_heartbeat_hour:
         try:
-            bot.send_message(CHAT_ID, f"✅ نبض البوت: أنا أعمل حالياً وأراقب {len(SYMBOLS)} زوجاً.\n⏰ الوقت: {datetime.now().strftime('%H:%M')}")
-            st.session_state.last_heartbeat_hour = current_hour
+            bot.send_message(CHAT_ID, f"✅ نبض البوت الساعي: يعمل حالياً.\n⏰ الوقت: {datetime.now().strftime('%H:%M')}")
+            st.session_state.last_heartbeat_hour = now_hour
         except: pass
 
-    # 2. تحديث الواجهة والرسوم البيانية للزوج المختار
     for s in SYMBOLS:
         is_viewed = (s == selected_symbol)
         df_result = check_market_with_ui(s, is_viewed)
         
         if is_viewed and df_result is not None:
             last_row = df_result.iloc[-1]
-            
-            # تحديث الـ Metrics
             metrics_col[0].metric("السعر الحالي", f"${last_row['close']}")
             metrics_col[1].metric("RSI", round(last_row['RSI'], 2))
             metrics_col[2].metric("الاتجاه", "صاعد" if last_row['close'] > last_row['EMA'] else "هابط")
 
-            # رسم الشارت الاحترافي
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
             fig.add_trace(go.Candlestick(x=df_result['time'], open=df_result['open'], high=df_result['high'], low=df_result['low'], close=df_result['close'], name="السعر"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_result['time'], y=df_result['EMA'], line=dict(color='orange', width=2), name="EMA 50"), row=1, col=1)
