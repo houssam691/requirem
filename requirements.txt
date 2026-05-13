@@ -1,0 +1,5 @@
+setuptools
+pandas
+pandas_ta
+pyTelegramBotAPI
+requests
