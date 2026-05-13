@@ -33,19 +33,35 @@ def calculate_levels(current_price, direction, df):
         tp = current_price - (recent_range * 2.0)
     return round(sl, 5), round(tp, 5)
 
-# --- الاستراتيجية ---
+# --- الاستراتيجية (تعديل: الفرصة الذهبية فقط) ---
 def advanced_predict(df):
     if len(df) < 50: return "NEUTRAL", 0
     close = df['close']
-    # حساب سريع للمؤشرات
-    ema20 = close.ewm(span=20).mean().iloc[-1]
-    ema50 = close.ewm(span=50).mean().iloc[-1]
-    rsi = (100 - (100 / (1 + (close.diff().where(close.diff() > 0, 0).mean() / (abs(close.diff().where(close.diff() < 0, 0)).mean() + 1e-9)))))
     
-    if close.iloc[-1] > ema20 and rsi < 65:
-        return "BUY", 85
-    elif close.iloc[-1] < ema20 and rsi > 35:
-        return "SELL", 85
+    # حساب المؤشرات اللازمة للفرصة الذهبية
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+    
+    # حساب RSI دقيق
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / (loss + 1e-9)
+    rsi = 100 - (100 / (1 + rs))
+    
+    last_close = close.iloc[-1]
+    last_ema20 = ema20.iloc[-1]
+    last_ema50 = ema50.iloc[-1]
+    last_rsi = rsi.iloc[-1]
+
+    # شرط الفرصة الذهبية للشراء: السعر فوق المتوسطات + تقاطع إيجابي + RSI في منطقة انطلاق
+    if last_close > last_ema20 > last_ema50 and 40 < last_rsi < 60:
+        return "BUY", 95
+    
+    # شرط الفرصة الذهبية للبيع: السعر تحت المتوسطات + تقاطع سلبي + RSI في منطقة كسر
+    elif last_close < last_ema20 < last_ema50 and 40 < last_rsi < 60:
+        return "SELL", 95
+        
     return "NEUTRAL", 0
 
 # --- تشغيل البوت ---
