@@ -1,4 +1,0 @@
-pandas
-pandas_ta
-pyTelegramBotAPI
-requests
