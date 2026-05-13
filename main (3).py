@@ -17,16 +17,11 @@ SYMBOLS = [
     'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'GOLD'
 ]
 
+# ذاكرة الجلسة لمنع تكرار نفس التنبيه في وقت قصير
 if 'last_signal_time' not in st.session_state:
     st.session_state.last_signal_time = {symbol: 0 for symbol in SYMBOLS}
 
-if 'last_report_hour' not in st.session_state:
-    st.session_state.last_report_hour = -1
-
 COOLDOWN_SECONDS = 300 
-
-# الساعات التي تريد استلام تقرير فيها (مثال: الساعات الفردية)
-REPORT_HOURS = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
 
 def calculate_rsi(series, period=14):
     try:
@@ -37,12 +32,13 @@ def calculate_rsi(series, period=14):
         return 100 - (100 / (1 + rs))
     except: return pd.Series([50] * len(series))
 
-st.set_page_config(page_title="Pro Trading Dashboard", layout="wide")
-st.title("🛡️ منصة المراقبة بنظام التقارير المجدولة")
+# --- إعدادات الواجهة ---
+st.set_page_config(page_title="Silent Pro Monitor", layout="wide")
+st.title("🛡️ نظام المراقبة الصامت")
+st.markdown("---")
 
 selected_symbol = st.sidebar.selectbox("اختر الزوج للعرض البياني", SYMBOLS)
-st.sidebar.markdown("---")
-st.sidebar.info(f"نظام التقارير: مفعل كل ساعتين")
+st.sidebar.success("✅ البوت يرسل الصفقات فقط الآن.")
 
 metrics_col = st.columns(3)
 chart_placeholder = st.empty()
@@ -64,7 +60,7 @@ def check_market_with_ui(symbol, is_viewed=False):
         last = df.iloc[-1]
         prev = df.iloc[-2]
         
-        # منطق الإشارات
+        # إرسال الصفقات فقط (تم إلغاء كل الرسائل الأخرى)
         if now_ts - st.session_state.last_signal_time[symbol] >= COOLDOWN_SECONDS:
             if last['close'] > last['EMA'] and prev['RSI'] < 30 and last['RSI'] >= 30:
                 bot.send_message(CHAT_ID, f"🎯 فرصة صعود: {symbol}\n📈 RSI: {round(last['RSI'], 2)}")
@@ -75,27 +71,20 @@ def check_market_with_ui(symbol, is_viewed=False):
         return df
     except: return None
 
+# الحلقة الرئيسية
 while True:
-    # --- نظام التقرير المجدول الجديد ---
-    now = datetime.now()
-    if now.hour in REPORT_HOURS and now.hour != st.session_state.last_report_hour:
-        try:
-            bot.send_message(CHAT_ID, f"📊 تقرير الحالة الدوري\n⏰ الوقت الحالي: {now.strftime('%H:00')}\n✅ البوت يراقب {len(SYMBOLS)} زوجاً بنجاح.")
-            st.session_state.last_report_hour = now.hour
-        except: pass
-
     for s in SYMBOLS:
         is_viewed = (s == selected_symbol)
         df_result = check_market_with_ui(s, is_viewed)
         
         if is_viewed and df_result is not None:
             last_row = df_result.iloc[-1]
-            metrics_col[0].metric("السعر الحالي", f"${last_row['close']}")
+            metrics_col[0].metric("السعر", f"${last_row['close']}")
             metrics_col[1].metric("RSI", round(last_row['RSI'], 2))
             metrics_col[2].metric("الاتجاه", "صاعد" if last_row['close'] > last_row['EMA'] else "هابط")
 
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=df_result['time'], open=df_result['open'], high=df_result['high'], low=df_result['low'], close=df_result['close'], name="Price"), row=1, col=1)
+            fig.add_trace(go.Candlestick(x=df_result['time'], open=df_result['open'], high=df_result['high'], low=df_result['low'], close=df_result['close'], name="Screener"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_result['time'], y=df_result['EMA'], line=dict(color='orange'), name="EMA 50"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_result['time'], y=df_result['RSI'], line=dict(color='magenta'), name="RSI"), row=2, col=1)
             fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
