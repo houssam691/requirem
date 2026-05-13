@@ -1,4 +1,5 @@
-streamlit
+pyTelegramBotAPI
 pandas
 plotly
 requests
+streamlit
