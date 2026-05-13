@@ -1,5 +1,0 @@
-pandas==2.2.2
-pandas_ta==0.3.14b0
-pyTelegramBotAPI==4.26.0
-requests==2.32.3
-numpy==1.26.4
