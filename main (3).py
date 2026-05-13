@@ -5,7 +5,7 @@ from plotly.subplots import make_subplots
 import telebot
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, date
 
 # --- إعداداتك الأصلية (لم يتم تغييرها) ---
 TOKEN = '8773849578:AAH9a6-8hU5YFYTad2EA5jQyfffIoeL8npk'
@@ -23,6 +23,15 @@ if 'last_signal_time' not in st.session_state:
 COOLDOWN_SECONDS = 300 
 if 'last_heartbeat_hour' not in st.session_state:
     st.session_state.last_heartbeat_hour = -1
+
+# --- الميزة الجديدة: إرسال رسالة الترحيب مرة واحدة فقط في اليوم ---
+if 'last_welcome_date' not in st.session_state:
+    try:
+        today_date = date.today().strftime('%Y-%m-%d')
+        bot.send_message(CHAT_ID, f"🛡️ تم تشغيل المنصة بنجاح.\n📅 التاريخ: {today_date}\n✅ البوت يراقب السوق الآن.")
+        st.session_state.last_welcome_date = today_date
+    except:
+        pass
 
 # --- دوالك الأصلية (بدون تغيير) ---
 def calculate_rsi(series, period=14):
@@ -89,7 +98,7 @@ def check_market_with_ui(symbol, is_viewed=False):
 
 # حلقة التشغيل الأساسية للموقع
 while True:
-    # 1. فحص رسالة النبض (Heartbeat)
+    # 1. فحص رسالة النبض (Heartbeat) - تبقى كل ساعة كما هي
     current_hour = datetime.now().hour
     if current_hour != st.session_state.last_heartbeat_hour:
         try:
@@ -121,4 +130,4 @@ while True:
             fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0))
             chart_placeholder.plotly_chart(fig, use_container_width=True)
             
-        time.sleep(0.5) # سرعة الفحص بين العملات
+        time.sleep(0.5)
