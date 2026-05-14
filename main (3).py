@@ -16,7 +16,7 @@ try:
 except Exception as e:
     bot = None
 
-# دمج القائمة القديمة (الرقمية والذهب) مع القائمة الجديدة (العملات)
+# دمج القائمة القديمة والجديدة
 SYMBOLS = [
     'BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'GOLD',
     'GBPAUD', 'EURAUD', 'USDCAD', 'CHFJPY', 'USDJPY', 
@@ -25,29 +25,43 @@ SYMBOLS = [
     'EURUSD', 'AUDCAD', 'AUDJPY', 'AUDCHF', 'AUDUSD'
 ]
 
-# --- دالة الاستراتيجية مع دراسة الوقت (ATR) ---
+# --- دالة الاستراتيجية المطورة (تأكيد الارتداد) ---
 def real_opportunity_strategy(df):
     try:
+        # حساب EMA 200
         df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+        
+        # حساب RSI
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs))
         
+        # حساب ATR لتحديد المدة
         df['tr'] = np.maximum(df['high'] - df['low'], 
                              np.maximum(abs(df['high'] - df['close'].shift(1)), 
                                       abs(df['low'] - df['close'].shift(1))))
         atr = df['tr'].rolling(window=14).mean().iloc[-1]
         
-        last_row = df.iloc[-1]
+        # جلب قيم الشمعة الحالية والشمعة السابقة للتأكد من التقاطع
+        last_rsi = df['rsi'].iloc[-1]
+        prev_rsi = df['rsi'].iloc[-2]
+        last_close = df['close'].iloc[-1]
+        last_ema = df['ema200'].iloc[-1]
+        
         decision = "NEUTRAL"
-        if last_row['close'] > last_row['ema200'] and last_row['rsi'] < 30:
+        
+        # شرط الشراء: السعر فوق EMA200 + RSI اخترق الـ 30 صعوداً (تأكيد الارتداد)
+        if last_close > last_ema and prev_rsi < 30 and last_rsi >= 30:
             decision = "BUY"
-        elif last_row['close'] < last_row['ema200'] and last_row['rsi'] > 70:
+            
+        # شرط البيع: السعر تحت EMA200 + RSI اخترق الـ 70 هبوطاً (تأكيد الارتداد)
+        elif last_close < last_ema and prev_rsi > 70 and last_rsi <= 70:
             decision = "SELL"
             
-        vol = (atr / last_row['close']) * 100
+        # تحديد المدة بناءً على ATR
+        vol = (atr / last_close) * 100
         if vol > 0.15: dur = "05:00"
         elif vol > 0.08: dur = "10:00"
         else: dur = "15:00"
@@ -95,12 +109,11 @@ for sym in SYMBOLS:
     if time.time() - st.session_state.tracker[sym] < 300:
         continue
 
-    # منطق جلب البيانات ليدعم العملات الرقمية والأزواج العادية
     if sym == 'GOLD':
         fsym, tsym = 'XAU', 'USD'
-    elif len(sym) == 6: # أزواج العملات مثل EURUSD
+    elif len(sym) == 6:
         fsym, tsym = sym[:3], sym[3:]
-    else: # العملات الرقمية مثل BTCUSD
+    else:
         fsym, tsym = sym.replace("USD", ""), "USD"
 
     url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={fsym}&tsym={tsym}&limit=250&api_key={API_KEY}"
