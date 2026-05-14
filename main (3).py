@@ -16,7 +16,6 @@ try:
 except Exception as e:
     bot = None
 
-# دمج القائمة القديمة والجديدة
 SYMBOLS = [
     'BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'GOLD',
     'GBPAUD', 'EURAUD', 'USDCAD', 'CHFJPY', 'USDJPY', 
@@ -25,48 +24,56 @@ SYMBOLS = [
     'EURUSD', 'AUDCAD', 'AUDJPY', 'AUDCHF', 'AUDUSD'
 ]
 
-# --- دالة الاستراتيجية المطورة (تأكيد الارتداد) ---
-def real_opportunity_strategy(df):
+# --- دالة الاستراتيجية المطورة (MTF + Price Action) ---
+def real_opportunity_strategy(df, df_5m):
     try:
-        # حساب EMA 200
+        # 1. تحليل الإطار الزمني الأكبر (5 دقائق) - Multi-Timeframe
+        df_5m['ema200_5m'] = df_5m['close'].ewm(span=200, adjust=False).mean()
+        trend_5m = "UP" if df_5m['close'].iloc[-1] > df_5m['ema200_5m'].iloc[-1] else "DOWN"
+
+        # 2. حساب المؤشرات على الإطار الحالي (دقيقة)
         df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
         
-        # حساب RSI
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs))
         
-        # حساب ATR لتحديد المدة
         df['tr'] = np.maximum(df['high'] - df['low'], 
                              np.maximum(abs(df['high'] - df['close'].shift(1)), 
                                       abs(df['low'] - df['close'].shift(1))))
         atr = df['tr'].rolling(window=14).mean().iloc[-1]
         
-        # جلب قيم الشمعة الحالية والشمعة السابقة للتأكد من التقاطع
-        last_rsi = df['rsi'].iloc[-1]
+        # 3. بيانات الشموع الحالية (Price Action)
+        last_row = df.iloc[-1]
         prev_rsi = df['rsi'].iloc[-2]
-        last_close = df['close'].iloc[-1]
-        last_ema = df['ema200'].iloc[-1]
+        last_rsi = df['rsi'].iloc[-1]
         
         decision = "NEUTRAL"
         
-        # شرط الشراء: السعر فوق EMA200 + RSI اخترق الـ 30 صعوداً (تأكيد الارتداد)
-        if last_close > last_ema and prev_rsi < 30 and last_rsi >= 30:
+        # شرط الشراء المحترف:
+        # اتجاه 5 دقائق صاعد + السعر فوق EMA200 + تقاطع RSI صعوداً + الشمعة الحالية خضراء
+        if (trend_5m == "UP" and 
+            last_row['close'] > last_row['ema200'] and 
+            prev_rsi < 30 and last_rsi >= 30 and 
+            last_row['close'] > last_row['open']):
             decision = "BUY"
             
-        # شرط البيع: السعر تحت EMA200 + RSI اخترق الـ 70 هبوطاً (تأكيد الارتداد)
-        elif last_close < last_ema and prev_rsi > 70 and last_rsi <= 70:
+        # شرط البيع المحترف:
+        # اتجاه 5 دقائق هابط + السعر تحت EMA200 + تقاطع RSI هبوطاً + الشمعة الحالية حمراء
+        elif (trend_5m == "DOWN" and 
+              last_row['close'] < last_row['ema200'] and 
+              prev_rsi > 70 and last_rsi <= 70 and 
+              last_row['close'] < last_row['open']):
             decision = "SELL"
             
-        # تحديد المدة بناءً على ATR
-        vol = (atr / last_close) * 100
+        vol = (atr / last_row['close']) * 100
         if vol > 0.15: dur = "05:00"
         elif vol > 0.08: dur = "10:00"
         else: dur = "15:00"
             
-        return decision, 85, dur
+        return decision, 90, dur # رفع نسبة الثقة في الرسالة إلى 90%
     except:
         return "NEUTRAL", 0, "00:00"
 
@@ -116,12 +123,18 @@ for sym in SYMBOLS:
     else:
         fsym, tsym = sym.replace("USD", ""), "USD"
 
-    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={fsym}&tsym={tsym}&limit=250&api_key={API_KEY}"
-    
+    # طلب بيانات فريم الدقيقة وفريم 5 دقائق
+    base_url = "https://min-api.cryptocompare.com/data/v2/histominute"
     try:
-        res = requests.get(url, timeout=5).json()
-        df = pd.DataFrame(res['Data']['Data'])
-        decision, conf, duration = real_opportunity_strategy(df)
+        # فريم دقيقة واحدة
+        res_1m = requests.get(f"{base_url}?fsym={fsym}&tsym={tsym}&limit=250&api_key={API_KEY}", timeout=5).json()
+        df_1m = pd.DataFrame(res_1m['Data']['Data'])
+        
+        # فريم 5 دقائق
+        res_5m = requests.get(f"{base_url}?fsym={fsym}&tsym={tsym}&limit=250&aggregate=5&api_key={API_KEY}", timeout=5).json()
+        df_5m = pd.DataFrame(res_5m['Data']['Data'])
+        
+        decision, conf, duration = real_opportunity_strategy(df_1m, df_5m)
         
         if decision != "NEUTRAL":
             st.session_state.tracker[sym] = time.time()
