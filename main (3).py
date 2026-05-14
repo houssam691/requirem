@@ -14,7 +14,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 
 SYMBOLS = ['BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']
 
-# استخدام session_state لتخزين وقت آخر نبض (Heartbeat) لمنع التكرار
+# استخدام session_state لتخزين الساعة التي تم الإرسال فيها لمنع التكرار
 if 'last_heartbeat_hour' not in st.session_state:
     st.session_state.last_heartbeat_hour = -1
 
@@ -24,24 +24,38 @@ def get_global_tracker():
 
 last_signal_tracker = get_global_tracker()
 
-# --- دالة إرسال تنبيه النبض الساعي ---
+# --- دالة إرسال تنبيه النبض الساعي (بناءً على الثانية 00) ---
 def send_hourly_heartbeat():
-    now = datetime.now()
+    now = datetime.now() # يعتمد على توقيت السيرفر العالمي
     current_hour = now.hour
+    current_minute = now.minute
+    current_second = now.second
     
-    # إذا تغيرت الساعة ولم نرسل تنبيه لهذه الساعة بعد
-    if current_hour != st.session_state.last_heartbeat_hour:
-        try:
-            current_time = now.strftime('%H:00')
-            heartbeat_msg = f"✅ **تنبيه حالة البوت**\n━━━━━━━━━━━━━━\nالبوت يعمل بنجاح حالياً.\n⏰ الوقت: {current_time}\n📡 مراقبة {len(SYMBOLS)} أزواج مستمرة."
-            bot.send_message(CHAT_ID, heartbeat_msg, parse_mode="Markdown")
-            
-            # تحديث الحالة لمنع الإرسال المتكرر في نفس الساعة
-            st.session_state.last_heartbeat_hour = current_hour
-        except Exception as e:
-            print(f"Heartbeat Error: {e}")
+    # الشرط: يجب أن نكون في الدقيقة 00 والثانية بين 0 و 30 
+    # لضمان التقاطها حتى لو كان السكربت في حالة sleep للحظات
+    if current_minute == 0 and 0 <= current_second <= 30:
+        # التأكد أننا لم نرسل رسالة لهذه الساعة المحددة من قبل
+        if st.session_state.last_heartbeat_hour != current_hour:
+            try:
+                # عرض الوقت بصيغة دقيقة جداً
+                exact_time = now.strftime('%H:00:00')
+                heartbeat_msg = f"""
+✅ **تنبيه حالة البوت (وقت دقيق)**
+━━━━━━━━━━━━━━
+🤖 البوت يعمل بكفاءة حالياً.
+⏰ التوقيت العالمي: {exact_time}
+📡 مراقبة {len(SYMBOLS)} أزواج مستمرة.
+━━━━━━━━━━━━━━
+                """
+                bot.send_message(CHAT_ID, heartbeat_msg, parse_mode="Markdown")
+                
+                # قفل الساعة الحالية
+                st.session_state.last_heartbeat_hour = current_hour
+                st.sidebar.success(f"تم إرسال نبض الساعة {current_hour} بنجاح.")
+            except Exception as e:
+                print(f"Heartbeat Error: {e}")
 
-# --- باقي الدوال (calculate_levels & advanced_predict) تبقى كما هي ---
+# --- دالة حساب مستويات التداول ---
 def calculate_levels(current_price, direction, df):
     recent_range = (df['high'] - df['low']).mean()
     if direction == "BUY":
@@ -52,24 +66,27 @@ def calculate_levels(current_price, direction, df):
         tp = current_price - (recent_range * 2.0)
     return round(sl, 5), round(tp, 5)
 
+# --- استراتيجية التنبؤ ---
 def advanced_predict(df):
     if len(df) < 50: return "NEUTRAL", 0
     close = df['close']
     ema20 = close.ewm(span=20).mean().iloc[-1]
     rsi = (100 - (100 / (1 + (close.diff().where(close.diff() > 0, 0).mean() / (abs(close.diff().where(close.diff() < 0, 0)).mean() + 1e-9)))))
+    
     if close.iloc[-1] > ema20 and rsi < 65:
         return "BUY", 85
     elif close.iloc[-1] < ema20 and rsi > 35:
         return "SELL", 85
     return "NEUTRAL", 0
 
-# --- تشغيل البوت ---
+# --- إعداد واجهة Streamlit ---
 st.set_page_config(page_title="VIP Trading Signals", page_icon="💹")
-st.sidebar.title("لوحة التحكم")
-selected_symbol = st.sidebar.selectbox("اختر الزوج لمراقبته", SYMBOLS)
+st.sidebar.header("🕹️ التحكم والنبض")
 
-# تشغيل فحص النبض الساعي
+# تشغيل فحص النبض الساعي بدقة الثانية
 send_hourly_heartbeat()
+
+selected_symbol = st.sidebar.selectbox("اختر الزوج لمراقبته", SYMBOLS)
 
 def run_analysis():
     s = selected_symbol.replace("USD", "").replace("GOLD", "XAU")
@@ -98,6 +115,6 @@ def run_analysis():
 
 run_analysis()
 
-# تحديث تلقائي كل 30 ثانية
+# تحديث الواجهة كل 30 ثانية
 time.sleep(30)
 st.rerun()
