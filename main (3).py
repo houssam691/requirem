@@ -16,7 +16,14 @@ try:
 except Exception as e:
     bot = None
 
-SYMBOLS = ['BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']
+# دمج القائمة القديمة (الرقمية والذهب) مع القائمة الجديدة (العملات)
+SYMBOLS = [
+    'BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'GOLD',
+    'GBPAUD', 'EURAUD', 'USDCAD', 'CHFJPY', 'USDJPY', 
+    'USDCHF', 'GBPCAD', 'EURCAD', 'GBPJPY', 'CADJPY', 
+    'EURGBP', 'EURJPY', 'GBPCHF', 'GBPUSD', 'EURCHF', 
+    'EURUSD', 'AUDCAD', 'AUDJPY', 'AUDCHF', 'AUDUSD'
+]
 
 # --- دالة الاستراتيجية مع دراسة الوقت (ATR) ---
 def real_opportunity_strategy(df):
@@ -53,12 +60,11 @@ def real_opportunity_strategy(df):
 if 'last_hour_sent' not in st.session_state:
     st.session_state.last_hour_sent = None
 if 'tracker' not in st.session_state:
-    # تهيئة التوقيت بـ 0 لضمان عمل الفحص من أول مرة
     st.session_state.tracker = {symbol: 0.0 for symbol in SYMBOLS}
 if 'signal_count' not in st.session_state:
     st.session_state.signal_count = 0
 
-# --- الواجهة التي طلبتها ---
+# --- الواجهة الأصلية ---
 st.set_page_config(page_title="Trading Bot", layout="wide")
 st.title("⏳ نظام التداول الآلي")
 
@@ -75,7 +81,7 @@ with col4:
 
 st.divider()
 
-# --- منطق رسالة الساعة الواحدة ---
+# --- رسالة الساعة الواحدة ---
 if current_time.minute == 0 and current_time.second <= 5:
     if st.session_state.last_hour_sent != current_time.hour:
         if bot:
@@ -86,21 +92,26 @@ if current_time.minute == 0 and current_time.second <= 5:
 
 # --- تحليل العملات ---
 for sym in SYMBOLS:
-    # فحص الوقت: إذا مر أقل من 300 ثانية (5 دقائق) على آخر إرسال لهذا الزوج، يتم تخطيه فوراً
     if time.time() - st.session_state.tracker[sym] < 300:
         continue
 
-    s_name = sym.replace("USD", "").replace("GOLD", "XAU")
-    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
+    # منطق جلب البيانات ليدعم العملات الرقمية والأزواج العادية
+    if sym == 'GOLD':
+        fsym, tsym = 'XAU', 'USD'
+    elif len(sym) == 6: # أزواج العملات مثل EURUSD
+        fsym, tsym = sym[:3], sym[3:]
+    else: # العملات الرقمية مثل BTCUSD
+        fsym, tsym = sym.replace("USD", ""), "USD"
+
+    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={fsym}&tsym={tsym}&limit=250&api_key={API_KEY}"
+    
     try:
         res = requests.get(url, timeout=5).json()
         df = pd.DataFrame(res['Data']['Data'])
         decision, conf, duration = real_opportunity_strategy(df)
         
         if decision != "NEUTRAL":
-            # تحديث التوقيت فور الإرسال لمنع التكرار
             st.session_state.tracker[sym] = time.time()
-            
             emoji = '🟢' if decision == 'BUY' else '🔴'
             entry_t = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%H:%M:%S")
             
