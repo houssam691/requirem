@@ -1,0 +1,14 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    - cron: '*/2 * * * *'
+  workflow_dispatch: 
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake Up Site
+        run: |
+          curl -I https://requirem-2w5fsgwlpzwxfa2zmmrdwk.streamlit.app/
