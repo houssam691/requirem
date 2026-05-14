@@ -3,8 +3,7 @@ import pandas as pd
 import telebot
 import time
 import requests
-from datetime import datetime, timedelta, timezone # استخدام timezone للوقت العالمي
-import numpy as np
+from datetime import datetime, timedelta, timezone
 
 # --- الإعدادات ---
 TOKEN = '8773849578:AAH9a6-8hU5YFYTad2EA5jQyfffIoeL8npk'
@@ -14,6 +13,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 
 SYMBOLS = ['BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']
 
+# --- دالة الاستراتيجية ---
 def real_opportunity_strategy(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     delta = df['close'].diff()
@@ -26,29 +26,26 @@ def real_opportunity_strategy(df):
     elif last_row['close'] < last_row['ema200'] and last_row['rsi'] > 70: return "SELL", 85
     return "NEUTRAL", 0
 
+# --- إدارة الحالة لضمان عدم التكرار ---
+if 'last_heartbeat' not in st.session_state:
+    st.session_state.last_heartbeat = None
 if 'tracker' not in st.session_state:
     st.session_state.tracker = {symbol: 0 for symbol in SYMBOLS}
-if 'last_heartbeat_hour' not in st.session_state:
-    st.session_state.last_heartbeat_hour = -1
 
-st.set_page_config(page_title="Time-Based Trading Bot")
-st.title("⏳ نظام التداول الزمني الاحترافي")
+st.set_page_config(page_title="Trading Bot")
+st.title("⏳ نظام التداول")
 
-# --- استخدام الوقت العالمي (UTC) لمنع التكرار نهائياً ---
-# الحصول على الساعة الحالية بتوقيت UTC
-utc_now = datetime.now(timezone.utc)
-current_utc_hour = utc_now.hour
+# --- منطق "رسالة واحدة كل ساعة" ---
+current_time_utc = datetime.now(timezone.utc)
+current_hour = current_time_utc.strftime("%Y-%m-%d %H") # صيغة الساعة فقط
 
-if st.session_state.last_heartbeat_hour != current_utc_hour:
-    # تعديل العرض فقط ليطابق وقتك (إضافة ساعة) دون التأثير على منطق الفحص
-    display_time = utc_now + timedelta(hours=1)
-    now_str = display_time.strftime("%d-%m-%Y %H:00:00")
-    
-    bot.send_message(CHAT_ID, f"✅ نظام التداول يعمل بنجاح\n⏰ الوقت الحالي: {now_str}")
-    st.session_state.last_heartbeat_hour = current_utc_hour
+if st.session_state.last_heartbeat != current_hour:
+    # عرض الوقت بتوقيتك (UTC+1)
+    display_time = (current_time_utc + timedelta(hours=1)).strftime("%d-%m-%Y %H:00:00")
+    bot.send_message(CHAT_ID, f"✅ نظام التداول يعمل\n⏰ الساعة: {display_time}")
+    st.session_state.last_heartbeat = current_hour
 
-status_box = st.empty()
-
+# --- تحليل العملات ---
 for sym in SYMBOLS:
     s_name = sym.replace("USD", "").replace("GOLD", "XAU")
     url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
@@ -58,15 +55,10 @@ for sym in SYMBOLS:
         decision, conf = real_opportunity_strategy(df)
         
         if decision != "NEUTRAL" and (time.time() - st.session_state.tracker[sym] > 600):
-            # وقت الإشارة أيضاً يعتمد على UTC + 1 ليناسب توقيتك
-            entry_dt = datetime.now(timezone.utc) + timedelta(hours=1)
-            expiry_dt = entry_dt + timedelta(minutes=15)
-            
-            msg = f"🎯 **إشارة زمنية: {sym}**\n━━━━━━━━━━━━━━\n📈 **الاتجاه:** {('🟢 صعود' if decision == 'BUY' else '🔴 هبوط')}\n⏰ **الدخول:** {entry_dt.strftime('%H:%M:%S')}\n⏳ **الانتهاء:** {expiry_dt.strftime('%H:%M:%S')}\n💪 **القوة:** {conf}%\n━━━━━━━━━━━━━━"
+            msg = f"🎯 **إشارة: {sym}**\n📈 **الاتجاه:** {('🟢 صعود' if decision == 'BUY' else '🔴 هبوط')}"
             bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
             st.session_state.tracker[sym] = time.time()
     except: continue
 
-status_box.write(f"✅ آخر تحديث (UTC+1): {(datetime.now(timezone.utc) + timedelta(hours=1)).strftime('%H:%M:%S')}")
-time.sleep(10)
+time.sleep(15)
 st.rerun()
