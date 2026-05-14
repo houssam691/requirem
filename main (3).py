@@ -3,7 +3,7 @@ import pandas as pd
 import telebot
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # استخدام timezone للوقت العالمي
 import numpy as np
 
 # --- الإعدادات ---
@@ -14,7 +14,6 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 
 SYMBOLS = ['BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']
 
-# --- دالة الاستراتيجية المدمجة ---
 def real_opportunity_strategy(df):
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
     delta = df['close'].diff()
@@ -23,13 +22,10 @@ def real_opportunity_strategy(df):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     last_row = df.iloc[-1]
-    if last_row['close'] > last_row['ema200'] and last_row['rsi'] < 30:
-        return "BUY", 85
-    elif last_row['close'] < last_row['ema200'] and last_row['rsi'] > 70:
-        return "SELL", 85
+    if last_row['close'] > last_row['ema200'] and last_row['rsi'] < 30: return "BUY", 85
+    elif last_row['close'] < last_row['ema200'] and last_row['rsi'] > 70: return "SELL", 85
     return "NEUTRAL", 0
 
-# إدارة الحالة
 if 'tracker' not in st.session_state:
     st.session_state.tracker = {symbol: 0 for symbol in SYMBOLS}
 if 'last_heartbeat_hour' not in st.session_state:
@@ -38,49 +34,39 @@ if 'last_heartbeat_hour' not in st.session_state:
 st.set_page_config(page_title="Time-Based Trading Bot")
 st.title("⏳ نظام التداول الزمني الاحترافي")
 
-# --- رسالة نبض القلب (مرة واحدة كل ساعة بتوقيتك المحلي) ---
-now_adjusted = datetime.now() + timedelta(hours=1)
-current_hour = now_adjusted.hour
+# --- استخدام الوقت العالمي (UTC) لمنع التكرار نهائياً ---
+# الحصول على الساعة الحالية بتوقيت UTC
+utc_now = datetime.now(timezone.utc)
+current_utc_hour = utc_now.hour
 
-if st.session_state.last_heartbeat_hour != current_hour:
-    now_str = now_adjusted.strftime("%d-%m-%Y %H:00:00")
+if st.session_state.last_heartbeat_hour != current_utc_hour:
+    # تعديل العرض فقط ليطابق وقتك (إضافة ساعة) دون التأثير على منطق الفحص
+    display_time = utc_now + timedelta(hours=1)
+    now_str = display_time.strftime("%d-%m-%Y %H:00:00")
+    
     bot.send_message(CHAT_ID, f"✅ نظام التداول يعمل بنجاح\n⏰ الوقت الحالي: {now_str}")
-    st.session_state.last_heartbeat_hour = current_hour
+    st.session_state.last_heartbeat_hour = current_utc_hour
 
 status_box = st.empty()
 
 for sym in SYMBOLS:
     s_name = sym.replace("USD", "").replace("GOLD", "XAU")
     url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
-    
     try:
         res = requests.get(url, timeout=5).json()
         df = pd.DataFrame(res['Data']['Data'])
         decision, conf = real_opportunity_strategy(df)
         
         if decision != "NEUTRAL" and (time.time() - st.session_state.tracker[sym] > 600):
-            entry_dt = datetime.now() + timedelta(hours=1)
+            # وقت الإشارة أيضاً يعتمد على UTC + 1 ليناسب توقيتك
+            entry_dt = datetime.now(timezone.utc) + timedelta(hours=1)
             expiry_dt = entry_dt + timedelta(minutes=15)
             
-            emoji = "🟢 صعود (CALL)" if decision == "BUY" else "🔴 هبوط (PUT)"
-            
-            msg = f"""
-🎯 **إشارة زمنية مؤكدة: {sym}**
-━━━━━━━━━━━━━━
-📈 **الاتجاه المتوقع:** {emoji}
-⏰ **وقت الدخول الآن:** {entry_dt.strftime('%H:%M:%S')}
-⏳ **وقت انتهاء الصفقة:** {expiry_dt.strftime('%H:%M:%S')}
-💪 **قوة الاحتمال:** {conf}%
-━━━━━━━━━━━━━━
-⚠️ *ادخل الصفقة فور وصول الرسالة*
-            """
+            msg = f"🎯 **إشارة زمنية: {sym}**\n━━━━━━━━━━━━━━\n📈 **الاتجاه:** {('🟢 صعود' if decision == 'BUY' else '🔴 هبوط')}\n⏰ **الدخول:** {entry_dt.strftime('%H:%M:%S')}\n⏳ **الانتهاء:** {expiry_dt.strftime('%H:%M:%S')}\n💪 **القوة:** {conf}%\n━━━━━━━━━━━━━━"
             bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
             st.session_state.tracker[sym] = time.time()
-            st.success(f"🚀 تم إرسال إشارة لـ {sym}")
-            
-    except Exception as e:
-        continue
+    except: continue
 
-status_box.write(f"✅ آخر تحديث: {now_adjusted.strftime('%H:%M:%S')}")
+status_box.write(f"✅ آخر تحديث (UTC+1): {(datetime.now(timezone.utc) + timedelta(hours=1)).strftime('%H:%M:%S')}")
 time.sleep(10)
 st.rerun()
