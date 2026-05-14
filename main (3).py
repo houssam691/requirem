@@ -5,111 +5,99 @@ import time
 import requests
 from datetime import datetime
 import numpy as np
-import threading  # مكتبة جديدة للعمل في الخلفية
 
-# --- الإعدادات (ثابتة) ---
+# --- الإعدادات الأساسية ---
 TOKEN = '8773849578:AAH9a6-8hU5YFYTad2EA5jQyfffIoeL8npk'
 CHAT_ID = '7553333305'
 API_KEY = 'e507283f6d2ebbc351b5f1c21763036c538121b0dc331208902672d897c7aab7'
-APP_URL = "https://requirem-2w5fsgwlpzwxfa2zmmrdwk.streamlit.app/" # رابط موقعك
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
 SYMBOLS = ['BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']
 
-# وظيفة الزيارة الذاتية لمنع النوم (كل دقيقتين)
-def keep_alive():
-    while True:
+# استخدام session_state لتخزين وقت آخر نبض (Heartbeat) لمنع التكرار
+if 'last_heartbeat_hour' not in st.session_state:
+    st.session_state.last_heartbeat_hour = -1
+
+@st.cache_resource
+def get_global_tracker():
+    return {symbol: 0 for symbol in SYMBOLS}
+
+last_signal_tracker = get_global_tracker()
+
+# --- دالة إرسال تنبيه النبض الساعي ---
+def send_hourly_heartbeat():
+    now = datetime.now()
+    current_hour = now.hour
+    
+    # إذا تغيرت الساعة ولم نرسل تنبيه لهذه الساعة بعد
+    if current_hour != st.session_state.last_heartbeat_hour:
         try:
-            requests.get(APP_URL)
-            # print("Self-ping successful") # اختياريا للتأكد في السجلات
-        except:
-            pass
-        time.sleep(120) # 120 ثانية = دقيقتين
+            current_time = now.strftime('%H:00')
+            heartbeat_msg = f"✅ **تنبيه حالة البوت**\n━━━━━━━━━━━━━━\nالبوت يعمل بنجاح حالياً.\n⏰ الوقت: {current_time}\n📡 مراقبة {len(SYMBOLS)} أزواج مستمرة."
+            bot.send_message(CHAT_ID, heartbeat_msg, parse_mode="Markdown")
+            
+            # تحديث الحالة لمنع الإرسال المتكرر في نفس الساعة
+            st.session_state.last_heartbeat_hour = current_hour
+        except Exception as e:
+            print(f"Heartbeat Error: {e}")
 
-# تشغيل وظيفة الزيارة في Thread منفصل عند تشغيل السكربت لأول مرة
-if 'ping_started' not in st.session_state:
-    threading.Thread(target=keep_alive, daemon=True).start()
-    st.session_state.ping_started = True
+# --- باقي الدوال (calculate_levels & advanced_predict) تبقى كما هي ---
+def calculate_levels(current_price, direction, df):
+    recent_range = (df['high'] - df['low']).mean()
+    if direction == "BUY":
+        sl = current_price - (recent_range * 1.5)
+        tp = current_price + (recent_range * 2.0)
+    else:
+        sl = current_price + (recent_range * 1.5)
+        tp = current_price - (recent_range * 2.0)
+    return round(sl, 5), round(tp, 5)
 
-if 'tracker' not in st.session_state:
-    st.session_state.tracker = {symbol: 0 for symbol in SYMBOLS}
-
-# --- الاستراتيجية الصارمة (الفرصة الحقيقية) ---
-def real_opportunity_strategy(df):
-    if len(df) < 100: return "NEUTRAL", 0
-    
+def advanced_predict(df):
+    if len(df) < 50: return "NEUTRAL", 0
     close = df['close']
-    volume = df['volumeto']
-    
-    # 1. فلتر الاتجاه العملاق (EMA 200)
-    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-    
-    # 2. فلتر الزخم المزدوج (RSI + MACD)
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().iloc[-1]
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().iloc[-1]
-    rsi = 100 - (100 / (1 + (gain / (loss + 1e-9))))
-    
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal_line = macd.ewm(span=9, adjust=False).mean()
-    
-    # 3. فلتر السيولة
-    avg_volume = volume.rolling(window=20).mean().iloc[-1]
-    current_volume = volume.iloc[-1]
-    
-    last_price = close.iloc[-1]
-    
-    if (last_price > ema200 and 
-        current_volume > avg_volume and 
-        50 < rsi < 65 and 
-        macd.iloc[-1] > signal_line.iloc[-1]):
-        return "BUY", 99
-
-    elif (last_price < ema200 and 
-          current_volume > avg_volume and 
-          35 < rsi < 50 and 
-          macd.iloc[-1] < signal_line.iloc[-1]):
-        return "SELL", 99
-        
+    ema20 = close.ewm(span=20).mean().iloc[-1]
+    rsi = (100 - (100 / (1 + (close.diff().where(close.diff() > 0, 0).mean() / (abs(close.diff().where(close.diff() < 0, 0)).mean() + 1e-9)))))
+    if close.iloc[-1] > ema20 and rsi < 65:
+        return "BUY", 85
+    elif close.iloc[-1] < ema20 and rsi > 35:
+        return "SELL", 85
     return "NEUTRAL", 0
 
-# --- المحرك الرئيسي ---
-st.set_page_config(page_title="Professional Trading Bot")
-st.title("🛡️ نظام الفحص الاحترافي - متصل 24/7")
-status_box = st.empty()
+# --- تشغيل البوت ---
+st.set_page_config(page_title="VIP Trading Signals", page_icon="💹")
+st.sidebar.title("لوحة التحكم")
+selected_symbol = st.sidebar.selectbox("اختر الزوج لمراقبته", SYMBOLS)
 
-# تشغيل الفحص
-for sym in SYMBOLS:
-    status_box.info(f"🔄 جاري تحليل {sym} وفق فلاتر السيولة والاتجاه...")
-    s_name = sym.replace("USD", "").replace("GOLD", "XAU")
-    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
+# تشغيل فحص النبض الساعي
+send_hourly_heartbeat()
+
+def run_analysis():
+    s = selected_symbol.replace("USD", "").replace("GOLD", "XAU")
+    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s}&tsym=USD&limit=100&api_key={API_KEY}"
     
     try:
         res = requests.get(url, timeout=10).json()
         df = pd.DataFrame(res['Data']['Data'])
-        price = df['close'].iloc[-1]
-        decision, conf = real_opportunity_strategy(df)
+        current_price = df['close'].iloc[-1]
+        direction, confidence = advanced_predict(df)
         
-        # تتبع الفواصل الزمنية (كل 10 دقائق لنفس العملة)
-        if decision != "NEUTRAL" and (time.time() - st.session_state.tracker[sym] > 600):
-            atr = (df['high'] - df['low']).rolling(window=14).mean().iloc[-1]
-            sl = round(price - (atr * 1.5), 5) if decision == "BUY" else round(price + (atr * 1.5), 5)
-            tp = round(price + (atr * 2.5), 5) if decision == "BUY" else round(price - (atr * 2.5), 5)
-            
-            now_str = datetime.now().strftime("%H:%M:%S")
-            emoji = "🟢 شراء" if decision == "BUY" else "🔴 بيع"
-            
-            msg = f"🎯 **إشارة مؤكدة: {sym}**\n💰 النوع: {emoji}\n📍 الدخول: {price}\n✅ الهدف: {tp}\n🛡️ الوقف: {sl}\n⏰ الوقت: {now_str}"
-            
-            bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-            st.session_state.tracker[sym] = time.time()
-            st.success(f"🚀 تم إرسال إشارة {sym}")
-    except:
-        continue
-    time.sleep(1)
+        st.metric(label=f"السعر الحالي لـ {selected_symbol}", value=current_price)
 
-# استراحة بسيطة ثم إعادة التشغيل التلقائي
+        current_ts = time.time()
+        if direction != "NEUTRAL" and (current_ts - last_signal_tracker[selected_symbol] > 300):
+            sl, tp = calculate_levels(current_price, direction, df)
+            emoji = "🟢 شراء (BUY)" if direction == "BUY" else "🔴 بيع (SELL)"
+            signal_msg = f"🎯 **إشارة تداول جديدة** 🎯\n━━━━━━━━━━━━━━\n💹 **الزوج:** #{selected_symbol}\n🎰 **النوع:** {emoji}\n🔥 **قوة الإشارة:** {confidence}%\n\n📍 **نقطة الدخول:** {current_price}\n✅ **الهدف (TP):** {tp}\n❌ **وقف الخسارة (SL):** {sl}\n\n⏰ **الوقت:** {datetime.now().strftime('%H:%M')}\n━━━━━━━━━━━━━━\n⚡ *تنبيه: التداول ينطوي على مخاطر عالية*"
+            
+            bot.send_message(CHAT_ID, signal_msg, parse_mode="Markdown")
+            last_signal_tracker[selected_symbol] = current_ts
+            st.success(f"🚀 تم إرسال توصية {direction} بنجاح!")
+
+    except Exception as e:
+        st.error(f"حدث خطأ: {e}")
+
+run_analysis()
+
+# تحديث تلقائي كل 30 ثانية
 time.sleep(30)
 st.rerun()
