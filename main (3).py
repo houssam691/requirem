@@ -3,7 +3,7 @@ import pandas as pd
 import telebot
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta # أضفنا timedelta لحساب وقت الانتهاء
 import numpy as np
 import threading
 
@@ -16,110 +16,65 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 
 SYMBOLS = ['BTCUSD', 'ETHUSD', 'BNBUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']
 
-# --- إدارة الحالة (Session State) ---
-if 'ping_started' not in st.session_state:
-    st.session_state.ping_started = True
+# إدارة الحالة
 if 'tracker' not in st.session_state:
     st.session_state.tracker = {symbol: 0 for symbol in SYMBOLS}
 if 'last_heartbeat_hour' not in st.session_state:
     st.session_state.last_heartbeat_hour = -1
 
-# وظيفة الزيارة الذاتية لمنع النوم
-def keep_alive():
-    while True:
-        try:
-            requests.get(APP_URL, timeout=10)
-        except:
-            pass
-        time.sleep(120)
+# --- دالة حساب وقت انتهاء الصفقة ---
+def calculate_expiry(entry_time, duration_minutes=15):
+    # افتراضياً، الصفقة تنتهي بعد 15 دقيقة من وقت الدخول
+    expiry_time = entry_time + timedelta(minutes=duration_minutes)
+    return expiry_time.strftime("%H:%M:%S")
 
-if 'thread_running' not in st.session_state:
-    threading.Thread(target=keep_alive, daemon=True).start()
-    st.session_state.thread_running = True
-
-# --- دالة إرسال تنبيه النبض الساعي (الدقة بالثواني) ---
-def send_hourly_heartbeat():
-    now = datetime.now()
-    current_hour = now.hour
-    current_minute = now.minute
-    current_second = now.second
-    
-    # الشرط: الدقيقة 00 والثانية بين 0 و 40 (لتفادي تخطيها بسبب الـ sleep)
-    if current_minute == 0 and 0 <= current_second <= 40:
-        if st.session_state.last_heartbeat_hour != current_hour:
-            try:
-                exact_time = now.strftime('%H:00:00')
-                msg = f"✅ **تنبيه حالة البوت (متصل)**\n━━━━━━━━━━━━━━\n🤖 النظام يعمل بكفاءة 24/7\n⏰ الوقت العالمي: {exact_time}\n📡 فحص السوق مستمر لـ {len(SYMBOLS)} أزواج."
-                bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                st.session_state.last_heartbeat_hour = current_hour
-            except:
-                pass
-
-# --- الاستراتيجية الصارمة ---
-def real_opportunity_strategy(df):
-    if len(df) < 100: return "NEUTRAL", 0
-    close = df['close']
-    volume = df['volumeto']
-    
-    ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-    
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().iloc[-1]
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().iloc[-1]
-    rsi = 100 - (100 / (1 + (gain / (loss + 1e-9))))
-    
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal_line = macd.ewm(span=9, adjust=False).mean()
-    
-    avg_volume = volume.rolling(window=20).mean().iloc[-1]
-    current_volume = volume.iloc[-1]
-    last_price = close.iloc[-1]
-    
-    if (last_price > ema200 and current_volume > avg_volume and 50 < rsi < 65 and macd.iloc[-1] > signal_line.iloc[-1]):
-        return "BUY", 99
-    elif (last_price < ema200 and current_volume > avg_volume and 35 < rsi < 50 and macd.iloc[-1] < signal_line.iloc[-1]):
-        return "SELL", 99
-    return "NEUTRAL", 0
-
-# --- المحرك الرئيسي ---
-st.set_page_config(page_title="Professional Trading Bot")
-st.title("🛡️ نموذج النسخ الاحترافي - متصل 24/7")
-
-# فحص نبض الساعة قبل بدء تحليل السوق
-send_hourly_heartbeat()
+# --- المحرك الرئيسي المعدل للنظام الزمني ---
+st.set_page_config(page_title="Time-Based Trading Bot")
+st.title("⏳ نظام التداول الزمني الاحترافي")
 
 status_box = st.empty()
 
 for sym in SYMBOLS:
-    status_box.info(f"🔄 جاري تحليل {sym} وفق فلاتر السيولة والاتجاه...")
+    status_box.info(f"🔄 جاري تحليل {sym} زمنياً...")
     s_name = sym.replace("USD", "").replace("GOLD", "XAU")
-    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
+    # جلب بيانات الشموع (نستخدم فريم الدقيقة ليكون التحليل دقيقاً زمنياً)
+    url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=100&api_key={API_KEY}"
     
     try:
         res = requests.get(url, timeout=10).json()
         df = pd.DataFrame(res['Data']['Data'])
-        price = df['close'].iloc[-1]
+        
+        # استدعاء الاستراتيجية (نفس الفلاتر الفنية لكن المخرجات زمنية)
+        from app import real_opportunity_strategy # استدعاء الاستراتيجية السابقة
         decision, conf = real_opportunity_strategy(df)
         
         if decision != "NEUTRAL" and (time.time() - st.session_state.tracker[sym] > 600):
-            atr = (df['high'] - df['low']).rolling(window=14).mean().iloc[-1]
-            sl = round(price - (atr * 1.5), 5) if decision == "BUY" else round(price + (atr * 1.5), 5)
-            tp = round(price + (atr * 2.5), 5) if decision == "BUY" else round(price - (atr * 2.5), 5)
+            # حساب الأوقات
+            entry_dt = datetime.now()
+            entry_time_str = entry_dt.strftime("%H:%M:%S")
+            expiry_time_str = calculate_expiry(entry_dt, duration_minutes=15) # يمكنك تغيير الـ 15 دقيقة
             
-            now_str = datetime.now().strftime("%H:%M:%S")
-            emoji = "🟢 شراء" if decision == "BUY" else "🔴 بيع"
+            emoji = "🟢 صعود (CALL)" if decision == "BUY" else "🔴 هبوط (PUT)"
             
-            msg = f"🎯 **إشارة مؤكدة: {sym}**\n💰 النوع: {emoji}\n📍 الدخول: {price}\n✅ الهدف: {tp}\n🛡️ الوقف: {sl}\n⏰ الوقت: {now_str}"
+            # الرسالة الجديدة التي طلبتها
+            msg = f"""
+🎯 **إشارة زمنية مؤكدة: {sym}**
+━━━━━━━━━━━━━━
+📈 **الاتجاه المتوقع:** {emoji}
+⏰ **وقت الدخول الآن:** {entry_time_str}
+⏳ **وقت انتهاء الصفقة:** {expiry_time_str}
+💪 **قوة الاحتمال:** {conf}%
+━━━━━━━━━━━━━━
+⚠️ *ادخل الصفقة فور وصول الرسالة*
+            """
             
             bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
             st.session_state.tracker[sym] = time.time()
-            st.success(f"🚀 تم إرسال إشارة {sym}")
-    except:
+            st.success(f"🚀 تم إرسال إشارة زمنية لـ {sym}")
+            
+    except Exception as e:
         continue
     time.sleep(1)
 
-# استراحة بسيطة ثم إعادة التشغيل التلقائي
 time.sleep(30)
 st.rerun()
