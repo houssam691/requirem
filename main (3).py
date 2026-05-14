@@ -28,7 +28,6 @@ def real_opportunity_strategy(df):
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs))
         
-        # دراسة التقلب الحقيقي للسعر
         df['tr'] = np.maximum(df['high'] - df['low'], 
                              np.maximum(abs(df['high'] - df['close'].shift(1)), 
                                       abs(df['low'] - df['close'].shift(1))))
@@ -41,7 +40,6 @@ def real_opportunity_strategy(df):
         elif last_row['close'] < last_row['ema200'] and last_row['rsi'] > 70:
             decision = "SELL"
             
-        # تحديد المدة بناءً على دراسة ATR
         vol = (atr / last_row['close']) * 100
         if vol > 0.15: dur = "05:00"
         elif vol > 0.08: dur = "10:00"
@@ -55,7 +53,8 @@ def real_opportunity_strategy(df):
 if 'last_hour_sent' not in st.session_state:
     st.session_state.last_hour_sent = None
 if 'tracker' not in st.session_state:
-    st.session_state.tracker = {symbol: 0 for symbol in SYMBOLS}
+    # تهيئة التوقيت بـ 0 لضمان عمل الفحص من أول مرة
+    st.session_state.tracker = {symbol: 0.0 for symbol in SYMBOLS}
 if 'signal_count' not in st.session_state:
     st.session_state.signal_count = 0
 
@@ -80,11 +79,17 @@ st.divider()
 if current_time.minute == 0 and current_time.second <= 5:
     if st.session_state.last_hour_sent != current_time.hour:
         if bot:
-            bot.send_message(CHAT_ID, f"✅ نظام التداول يعمل\n⏰ الوقت: {current_time.strftime('%H:%M:%S')}")
-            st.session_state.last_hour_sent = current_time.hour
+            try:
+                bot.send_message(CHAT_ID, f"✅ نظام التداول يعمل\n⏰ الوقت: {current_time.strftime('%H:%M:%S')}")
+                st.session_state.last_hour_sent = current_time.hour
+            except: pass
 
 # --- تحليل العملات ---
 for sym in SYMBOLS:
+    # فحص الوقت: إذا مر أقل من 300 ثانية (5 دقائق) على آخر إرسال لهذا الزوج، يتم تخطيه فوراً
+    if time.time() - st.session_state.tracker[sym] < 300:
+        continue
+
     s_name = sym.replace("USD", "").replace("GOLD", "XAU")
     url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
     try:
@@ -92,17 +97,18 @@ for sym in SYMBOLS:
         df = pd.DataFrame(res['Data']['Data'])
         decision, conf, duration = real_opportunity_strategy(df)
         
-        if decision != "NEUTRAL" and (time.time() - st.session_state.tracker[sym] > 600):
+        if decision != "NEUTRAL":
+            # تحديث التوقيت فور الإرسال لمنع التكرار
+            st.session_state.tracker[sym] = time.time()
+            
             emoji = '🟢' if decision == 'BUY' else '🔴'
             entry_t = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%H:%M:%S")
             
-            # الرسالة بالتنسيق المطلوب
             msg = f"🎯 إشارة: {sym}\n{emoji} الاتجاه: {'صعود' if decision == 'BUY' else 'هبوط'}\n⏳ مدة الصفقة: {duration} دقيقة\n⏰ وقت الدخول: {entry_t}\n💪 الثقة: {conf}%"
             
             if bot:
                 bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
                 st.session_state.signal_count += 1
-                st.session_state.tracker[sym] = time.time()
     except: continue
 
 time.sleep(2)
