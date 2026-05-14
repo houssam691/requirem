@@ -35,17 +35,15 @@ if 'tracker' not in st.session_state:
 if 'last_heartbeat_hour' not in st.session_state:
     st.session_state.last_heartbeat_hour = -1
 
-def calculate_expiry(entry_time, duration_minutes=15):
-    expiry_time = entry_time + timedelta(minutes=duration_minutes)
-    return expiry_time.strftime("%H:%M:%S")
-
 st.set_page_config(page_title="Time-Based Trading Bot")
 st.title("⏳ نظام التداول الزمني الاحترافي")
 
-# --- رسالة نبض القلب (مرة واحدة كل ساعة) ---
-current_hour = datetime.now().hour
+# --- رسالة نبض القلب (مرة واحدة كل ساعة بتوقيتك المحلي) ---
+now_adjusted = datetime.now() + timedelta(hours=1)
+current_hour = now_adjusted.hour
+
 if st.session_state.last_heartbeat_hour != current_hour:
-    now_str = datetime.now().strftime("%Y-%m-%d %H:00:00")
+    now_str = now_adjusted.strftime("%d-%m-%Y %H:00:00")
     bot.send_message(CHAT_ID, f"✅ نظام التداول يعمل بنجاح\n⏰ الوقت الحالي: {now_str}")
     st.session_state.last_heartbeat_hour = current_hour
 
@@ -53,7 +51,6 @@ status_box = st.empty()
 
 for sym in SYMBOLS:
     s_name = sym.replace("USD", "").replace("GOLD", "XAU")
-    # الاقتراح 3: تقليل timeout لـ 5 ثوانٍ
     url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={s_name}&tsym=USD&limit=250&api_key={API_KEY}"
     
     try:
@@ -62,8 +59,9 @@ for sym in SYMBOLS:
         decision, conf = real_opportunity_strategy(df)
         
         if decision != "NEUTRAL" and (time.time() - st.session_state.tracker[sym] > 600):
-            entry_dt = datetime.now()
-            expiry_time_str = calculate_expiry(entry_dt, duration_minutes=15)
+            entry_dt = datetime.now() + timedelta(hours=1)
+            expiry_dt = entry_dt + timedelta(minutes=15)
+            
             emoji = "🟢 صعود (CALL)" if decision == "BUY" else "🔴 هبوط (PUT)"
             
             msg = f"""
@@ -71,7 +69,7 @@ for sym in SYMBOLS:
 ━━━━━━━━━━━━━━
 📈 **الاتجاه المتوقع:** {emoji}
 ⏰ **وقت الدخول الآن:** {entry_dt.strftime('%H:%M:%S')}
-⏳ **وقت انتهاء الصفقة:** {expiry_time_str}
+⏳ **وقت انتهاء الصفقة:** {expiry_dt.strftime('%H:%M:%S')}
 💪 **قوة الاحتمال:** {conf}%
 ━━━━━━━━━━━━━━
 ⚠️ *ادخل الصفقة فور وصول الرسالة*
@@ -83,7 +81,6 @@ for sym in SYMBOLS:
     except Exception as e:
         continue
 
-# الاقتراح 2: تقليل وقت الانتظار الكلي لـ 10 ثوانٍ
-status_box.write(f"✅ آخر تحديث: {datetime.now().strftime('%H:%M:%S')}")
+status_box.write(f"✅ آخر تحديث: {now_adjusted.strftime('%H:%M:%S')}")
 time.sleep(10)
 st.rerun()
